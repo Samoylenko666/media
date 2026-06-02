@@ -207,7 +207,10 @@ class FileAdder
                 $handle,
             );
         } finally {
-            fclose($handle);
+            if (is_resource($handle)) {
+                fclose($handle);
+            }
+
         }
 
         $this->dispatchConversions($media, $collectionDef);
