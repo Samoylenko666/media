@@ -1,5 +1,14 @@
 <?php
 
+use Jurager\Media\Converters\ImageConverter;
+use Jurager\Media\Converters\PdfConverter;
+use Jurager\Media\Converters\SvgConverter;
+use Jurager\Media\Models\Media;
+use Jurager\Media\Models\MediaConversion;
+use Jurager\Media\Processors\BitmapImageProcessor;
+use Jurager\Media\Processors\SvgProcessor;
+use Jurager\Media\Support\PathGenerator;
+
 return [
 
     /*
@@ -92,6 +101,45 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Automatic Cleanup Schedule
+    |--------------------------------------------------------------------------
+    | Time (HH:MM) at which media:clean runs daily. Set to null to disable
+    | automatic scheduling and manage the schedule yourself.
+    */
+    'clean_schedule' => env('MEDIA_CLEAN_SCHEDULE', '01:00'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Custom Cleaners
+    |--------------------------------------------------------------------------
+    | Classes implementing MediaCleaner that run after the built-in passes
+    | (no parent, unregistered collection). Each cleaner receives the surviving
+    | batch and returns the subset to delete.
+    */
+    'cleaners' => [],
+
+    /*
+    |--------------------------------------------------------------------------
+    | File Processors
+    |--------------------------------------------------------------------------
+    | Maps MIME type patterns to processor classes (implement FileProcessor interface).
+    | Processors run at upload time: they normalize the file (e.g. strip EXIF) and
+    | extract metadata properties (e.g. width, height) stored in media.properties.
+    |
+    | Exact match (e.g. 'image/svg+xml') takes priority over wildcards ('image/*').
+    | File types with no match fall through to PassthroughProcessor (no-op).
+    |
+    | Built-in processors:
+    |   BitmapImageProcessor — strips EXIF and extracts dimensions for raster images
+    |   SvgProcessor         — extracts dimensions from SVG viewBox/width/height attributes
+    */
+    'processors' => [
+        'image/svg+xml' => SvgProcessor::class,
+        'image/*' => BitmapImageProcessor::class,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Converters
     |--------------------------------------------------------------------------
     | Maps MIME type patterns to converter classes (implement Converter interface).
@@ -99,15 +147,16 @@ return [
     | Register your own converter for any file type — video, SVG, Office docs, etc.
     |
     | Built-in converters:
-    |   ImageConverter — handles all image/* types via Intervention Image (ext-gd or ext-imagick)
+    |   ImageConverter — handles all raster image/* types via Intervention Image
     |   PdfConverter  — rasterizes a PDF page to an image (requires ext-imagick + Ghostscript)
     |
     | File types with no registered converter will have their conversions marked
     | as failed with a clear error message in media_conversions.error_message.
     */
     'converters' => [
-        'image/*'         => \Jurager\Media\Converters\ImageConverter::class,
-        'application/pdf' => \Jurager\Media\Converters\PdfConverter::class,
+        'image/svg+xml' => SvgConverter::class,
+        'image/*' => ImageConverter::class,
+        'application/pdf' => PdfConverter::class,
     ],
 
     /*
@@ -122,7 +171,7 @@ return [
     */
     'pdf_converter' => [
         'resolution' => env('MEDIA_PDF_RESOLUTION', 150),
-        'page'       => 0,
+        'page' => 0,
     ],
 
     /*
@@ -132,8 +181,8 @@ return [
     | Override the default Eloquent models if you need to extend them.
     */
     'models' => [
-        'media'            => \Jurager\Media\Models\Media::class,
-        'media_conversion' => \Jurager\Media\Models\MediaConversion::class,
+        'media' => Media::class,
+        'media_conversion' => MediaConversion::class,
     ],
 
     /*
@@ -144,6 +193,6 @@ return [
     | Default: {ModelClass}/{id}/{collection}/
     | Implement PathGenerator and register your class here to customise.
     */
-    'path_generator' => \Jurager\Media\Support\PathGenerator::class,
+    'path_generator' => PathGenerator::class,
 
 ];

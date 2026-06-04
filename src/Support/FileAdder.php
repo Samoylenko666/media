@@ -1,20 +1,4 @@
-<?php /** @noinspection PhpComposerExtensionStubsInspection */
-/** @noinspection ALL */
-/** @noinspection ALL */
-/** @noinspection ALL */
-/** @noinspection ALL */
-/** @noinspection ALL */
-/** @noinspection ALL */
-/** @noinspection ALL */
-/** @noinspection ALL */
-/** @noinspection ALL */
-/** @noinspection ALL */
-/** @noinspection ALL */
-/** @noinspection ALL */
-/** @noinspection ALL */
-/** @noinspection ALL */
-
-/** @noinspection ALL */
+<?php
 
 namespace Jurager\Media\Support;
 
@@ -39,18 +23,35 @@ class FileAdder
     protected string $sourceType = 'upload';
 
     protected array $urlHeaders = [];
+
     protected string $base64MimeType = '';
+
     protected string $sourceDisk = '';
 
     protected string $collection = 'default';
+
     protected string $customName = '';
+
     protected string $customFileName = '';
+
     protected bool $preservingOriginal = false;
 
     /** Temp files created during processing; all cleaned up after upload. */
     protected array $tempFiles = [];
 
-    public function __construct(protected Model $subject) {}
+    protected Model $subject;
+
+    public function __construct(
+        protected FileProcessorRegistry $processorRegistry,
+        protected PathGenerator $pathGenerator,
+    ) {}
+
+    public function for(Model $subject): static
+    {
+        $this->subject = $subject;
+
+        return $this;
+    }
 
     public function setFile(UploadedFile|string $file): static
     {
@@ -114,15 +115,14 @@ class FileAdder
 
         $this->guardAgainstCollectionConstraints();
 
-        if ($this->isSingleFileCollection()) {
-            $this->subject->clearMediaCollection($collection);
-        }
-
         $media = $this->uploadAndCreate();
 
-        // onlyKeepLatest(n > 1): purge oldest files that exceed the limit
+        // Prune after the upload succeeds — covers both singleFile() [limit=1]
+        // and onlyKeepLatest(n) [limit>1] through the same safe path.
+        // The new file already exists before any old one is removed.
         $limit = $this->getCollectionSizeLimit();
-        if ($limit > 1) {
+
+        if ($limit >= 1) {
             $this->subject->media()
                 ->where('collection_name', $collection)
                 ->orderByDesc('order_column')
@@ -134,6 +134,16 @@ class FileAdder
         }
 
         return $media;
+    }
+
+    /**
+     * Upload and attach without collection semantics.
+     * Equivalent to toMediaCollection('default') — useful when collections
+     * are not needed and you just want to attach a single file to the model.
+     */
+    public function save(): Media
+    {
+        return $this->toMediaCollection();
     }
 
     protected function uploadAndCreate(): Media
@@ -149,17 +159,18 @@ class FileAdder
     {
         $sourcePath = $this->resolveSourcePath();
 
-        $processor = new ImageProcessor;
-        [$uploadPath, $properties] = $processor->process($sourcePath);
-
-        if ($uploadPath !== $sourcePath) {
-            $this->tempFiles[] = $uploadPath;
-        }
+        $mimeType = mime_content_type($sourcePath) ?: 'application/octet-stream';
 
         // For URL/base64/disk sources, validate actual MIME after download
-        $this->guardAgainstActualMimeType($uploadPath);
+        $this->guardAgainstActualMimeType($sourcePath, $mimeType);
 
-        $hash = md5_file($uploadPath);
+        $result = $this->processorRegistry->resolve($mimeType)->process($sourcePath, $mimeType);
+
+        if ($result->path !== $sourcePath) {
+            $this->tempFiles[] = $result->path;
+        }
+
+        $hash = md5_file($result->path);
 
         if (config('media.deduplication', true)) {
             $existing = $this->findDuplicate($hash);
@@ -169,7 +180,7 @@ class FileAdder
             }
         }
 
-        [$fileName, $name, $mimeType, $size] = $this->resolveFileInfo($uploadPath);
+        [$fileName, $name, $size] = $this->resolveFileInfo($result->path, $mimeType);
         $safeFileName = $this->sanitizeFileName($fileName);
 
         $collectionDef = method_exists($this->subject, 'getMediaCollection')
@@ -177,9 +188,6 @@ class FileAdder
             : null;
 
         $disk = $collectionDef?->getDisk() ?? config('media.disk', 's3');
-
-        /** @var PathGenerator $generator */
-        $generator = app(config('media.path_generator', PathGenerator::class));
 
         $mediaClass = config('media.models.media', Media::class);
 
@@ -196,21 +204,20 @@ class FileAdder
         $media->size = $size;
         $media->hash = $hash;
         $media->order_column = $this->getNextOrderColumn();
-        $media->properties = $properties ?: null;
+        $media->properties = $result->properties ?: null;
         $media->save();
 
-        $handle = fopen($uploadPath, 'rb');
+        $handle = fopen($result->path, 'rb');
 
         try {
             Storage::disk($disk)->put(
-                $generator->getPath($media) . $safeFileName,
+                $this->pathGenerator->getPath($media).$safeFileName,
                 $handle,
             );
         } finally {
             if (is_resource($handle)) {
                 fclose($handle);
             }
-
         }
 
         $this->dispatchConversions($media, $collectionDef);
@@ -221,10 +228,10 @@ class FileAdder
     protected function resolveSourcePath(): string
     {
         return match ($this->sourceType) {
-            'url'    => $this->downloadFromUrl(),
+            'url' => $this->downloadFromUrl(),
             'base64' => $this->decodeBase64(),
-            'disk'   => $this->downloadFromDisk(),
-            default  => $this->resolveUploadPath(),
+            'disk' => $this->downloadFromDisk(),
+            default => $this->resolveUploadPath(),
         };
     }
 
@@ -324,20 +331,18 @@ class FileAdder
         return $tmpFile;
     }
 
-    protected function resolveFileInfo(string $uploadPath): array
+    protected function resolveFileInfo(string $uploadPath, string $mimeType): array
     {
         if ($this->file instanceof UploadedFile) {
             $fileName = $this->customFileName ?: $this->file->getClientOriginalName();
-            $mimeType = mime_content_type($uploadPath) ?: $this->file->getClientMimeType();
         } else {
             $fileName = $this->customFileName ?: 'file';
-            $mimeType = mime_content_type($uploadPath) ?: 'application/octet-stream';
         }
 
         $name = $this->customName ?: pathinfo($fileName, PATHINFO_FILENAME);
         $size = filesize($uploadPath);
 
-        return [$fileName, $name, $mimeType, $size];
+        return [$fileName, $name, $size];
     }
 
     protected function findDuplicate(string $hash): ?Media
@@ -354,7 +359,7 @@ class FileAdder
 
     protected function dispatchConversions(Media $media, mixed $collectionDef): void
     {
-        if (! method_exists($this->subject, 'getConversionsForCollection')) {
+        if (! method_exists($this->subject, 'getConversionsForMedia')) {
             return;
         }
 
@@ -362,7 +367,7 @@ class FileAdder
             return;
         }
 
-        $all = $this->subject->getConversionsForCollection($this->collection);
+        $all = $this->subject->getConversionsForMedia($media);
 
         if (empty($all)) {
             return;
@@ -374,18 +379,17 @@ class FileAdder
 
         $mediaConversionClass = config('media.models.media_conversion', MediaConversion::class);
 
-        // Create a pending record for every applicable conversion
         foreach ($all as $conversion) {
             $mediaConversionClass::create([
-                'media_id'  => $media->id,
-                'name'      => $conversion->name,
-                'status'    => 'pending',
-                'disk'      => $convDisk,
+                'media_id' => $media->id,
+                'name' => $conversion->name,
+                'status' => 'pending',
+                'disk' => $convDisk,
                 'extension' => $conversion->getFormat() ?: pathinfo($media->file_name, PATHINFO_EXTENSION),
             ]);
         }
 
-        $sync  = array_values(array_filter($all, static fn ($c) => ! $c->isQueued()));
+        $sync = array_values(array_filter($all, static fn ($c) => ! $c->isQueued()));
         $async = array_values(array_filter($all, static fn ($c) => $c->isQueued()));
 
         if (! empty($sync)) {
@@ -411,7 +415,7 @@ class FileAdder
 
     protected function sanitizeFileName(string $fileName): string
     {
-        $ext  = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+        $ext = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
         $base = Str::slug(pathinfo($fileName, PATHINFO_FILENAME)) ?: 'file';
 
         if ($ext && in_array($ext, self::BLOCKED_EXTENSIONS, true)) {
@@ -423,9 +427,6 @@ class FileAdder
         return $ext ? "{$base}.{$ext}" : $base;
     }
 
-    /**
-     * @throws \Throwable
-     */
     protected function getNextOrderColumn(): int
     {
         $mediaClass = config('media.models.media', Media::class);
@@ -438,17 +439,8 @@ class FileAdder
                 ->lockForUpdate()
                 ->get(['order_column']);
 
-            return (int) $rows->max('order_column');
+            return (int) $rows->max('order_column') + 1;
         });
-    }
-
-    protected function isSingleFileCollection(): bool
-    {
-        if (! method_exists($this->subject, 'getMediaCollection')) {
-            return false;
-        }
-
-        return $this->subject->getMediaCollection($this->collection)?->isSingleFile() ?? false;
     }
 
     protected function getCollectionSizeLimit(): int
@@ -477,7 +469,7 @@ class FileAdder
         }
     }
 
-    protected function guardAgainstActualMimeType(string $uploadPath): void
+    protected function guardAgainstActualMimeType(string $uploadPath, string $mimeType): void
     {
         if ($this->file instanceof UploadedFile) {
             return;
@@ -499,12 +491,10 @@ class FileAdder
             return;
         }
 
-        $actualMime = mime_content_type($uploadPath) ?: 'application/octet-stream';
-
-        if (! in_array($actualMime, $allowed, true)) {
+        if (! in_array($mimeType, $allowed, true)) {
             throw new InvalidArgumentException(
-                "File type [{$actualMime}] is not allowed in collection [{$this->collection}]. "
-                . 'Allowed: ' . implode(', ', $allowed)
+                "File type [{$mimeType}] is not allowed in collection [{$this->collection}]. "
+                .'Allowed: '.implode(', ', $allowed)
             );
         }
     }
@@ -529,7 +519,7 @@ class FileAdder
             if (! in_array($mimeType, $allowed, true)) {
                 throw new InvalidArgumentException(
                     "File type [{$mimeType}] is not allowed in collection [{$this->collection}]. "
-                    . 'Allowed: ' . implode(', ', $allowed)
+                    .'Allowed: '.implode(', ', $allowed)
                 );
             }
         }
@@ -539,13 +529,13 @@ class FileAdder
         if ($maxSize > 0 && $this->file instanceof UploadedFile && $this->file->getSize() > $maxSize) {
             throw new InvalidArgumentException(
                 "File size [{$this->file->getSize()} bytes] exceeds the maximum [{$maxSize} bytes] "
-                . "for collection [{$this->collection}]."
+                ."for collection [{$this->collection}]."
             );
         }
 
         $acceptor = $collection->getFileAcceptor();
 
-        if ($acceptor !== null && $this->file instanceof UploadedFile && !$acceptor($this->file, $collection)) {
+        if ($acceptor !== null && $this->file instanceof UploadedFile && ! $acceptor($this->file, $collection)) {
             throw new InvalidArgumentException(
                 "The uploaded file was rejected by the custom validator for collection [{$this->collection}]."
             );

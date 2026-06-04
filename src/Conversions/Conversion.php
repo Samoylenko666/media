@@ -9,13 +9,22 @@ class Conversion
     use Conditionable;
 
     protected int $width = 0;
+
     protected int $height = 0;
+
     protected string $fitMethod = 'scale'; // scale | cover | contain
+
     protected int $quality = 80;
+
     protected string $format = ''; // '', 'jpg', 'webp', 'png', 'gif', 'avif'
+
     protected bool $queued = true;
+
     protected string $queueName = '';
+
     protected array $collections = [];
+
+    protected array $mimeTypes = [];
 
     public function __construct(public readonly string $name) {}
 
@@ -103,22 +112,70 @@ class Conversion
         return $this;
     }
 
+    /**
+     * Limit this conversion to specific MIME type pattern(s).
+     * Supports glob-style wildcards: 'image/*', 'application/pdf'.
+     * When not called, the conversion runs for every MIME type.
+     */
+    public function performOnMimeTypes(string ...$patterns): static
+    {
+        $this->mimeTypes = $patterns;
+
+        return $this;
+    }
+
     public function shouldBePerformedOn(string $collection): bool
     {
         return empty($this->collections) || in_array($collection, $this->collections, true);
     }
 
-    public function isQueued(): bool { return $this->queued; }
+    public function shouldBePerformedOnMimeType(string $mimeType): bool
+    {
+        if (empty($this->mimeTypes)) {
+            return true;
+        }
 
-    public function getQueue(): string { return $this->queueName ?: config('media.queue', 'default'); }
+        foreach ($this->mimeTypes as $pattern) {
+            if (fnmatch($pattern, $mimeType)) {
+                return true;
+            }
+        }
 
-    public function getWidth(): int { return $this->width; }
+        return false;
+    }
 
-    public function getHeight(): int { return $this->height; }
+    public function isQueued(): bool
+    {
+        return $this->queued;
+    }
 
-    public function getFitMethod(): string { return $this->fitMethod; }
+    public function getQueue(): string
+    {
+        return $this->queueName ?: config('media.queue', 'default');
+    }
 
-    public function getQuality(): int { return $this->quality; }
+    public function getWidth(): int
+    {
+        return $this->width;
+    }
 
-    public function getFormat(): string { return $this->format; }
+    public function getHeight(): int
+    {
+        return $this->height;
+    }
+
+    public function getFitMethod(): string
+    {
+        return $this->fitMethod;
+    }
+
+    public function getQuality(): int
+    {
+        return $this->quality;
+    }
+
+    public function getFormat(): string
+    {
+        return $this->format;
+    }
 }

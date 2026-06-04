@@ -3,6 +3,7 @@
 namespace Jurager\Media\Contracts;
 
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
 use Jurager\Media\Conversions\Conversion;
@@ -12,6 +13,8 @@ use Jurager\Media\Support\FileAdder;
 
 interface InteractsWithMedia
 {
+    public function media(): MorphMany;
+
     public function addMedia(UploadedFile|string $file): FileAdder;
 
     public function addMediaFromUrl(string $url, array $headers = []): FileAdder;
@@ -62,7 +65,12 @@ interface InteractsWithMedia
 
     public function addMediaCollection(string $name): MediaCollection;
 
+    public function getConversionsForMedia(Media $media): array;
+
     public function getRegisteredMediaConversions(): array;
+
+    /** @return array<string, MediaCollection> */
+    public function getRegisteredMediaCollections(): array;
 
     public function getMediaCollection(string $name): ?MediaCollection;
 }

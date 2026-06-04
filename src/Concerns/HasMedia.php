@@ -1,10 +1,4 @@
-<?php /** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
-/** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
-/** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
-/** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
-/** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
-
-/** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
+<?php
 
 namespace Jurager\Media\Concerns;
 
@@ -20,8 +14,10 @@ use InvalidArgumentException;
 use Jurager\Media\Conversions\Conversion;
 use Jurager\Media\MediaCollection;
 use Jurager\Media\Models\Media;
+use Jurager\Media\Models\MediaConversion;
 use Jurager\Media\Support\FileAdder;
 use Jurager\Media\Support\PathGenerator;
+use PHPUnit\Framework\Assert;
 use Throwable;
 
 trait HasMedia
@@ -33,6 +29,9 @@ trait HasMedia
     protected array $mediaCollections = [];
 
     protected bool $mediaCollectionsRegistered = false;
+
+    /** Cached result of registerMediaConversions() — null means not yet built. */
+    protected ?array $registeredConversionsCache = null;
 
     /**
      * When true, all media is deleted automatically when the model is deleted.
@@ -70,7 +69,7 @@ trait HasMedia
 
     public function addMedia(UploadedFile|string $file): FileAdder
     {
-        return new FileAdder($this)->setFile($file);
+        return $this->makeFileAdder()->setFile($file);
     }
 
     /**
@@ -80,7 +79,7 @@ trait HasMedia
      */
     public function addMediaFromUrl(string $url, array $headers = []): FileAdder
     {
-        return new FileAdder($this)->setFileFromUrl($url, $headers);
+        return $this->makeFileAdder()->setFileFromUrl($url, $headers);
     }
 
     /**
@@ -89,7 +88,7 @@ trait HasMedia
      */
     public function addMediaFromBase64(string $base64, string $mimeType = ''): FileAdder
     {
-        return new FileAdder($this)->setFileFromBase64($base64, $mimeType);
+        return $this->makeFileAdder()->setFileFromBase64($base64, $mimeType);
     }
 
     /**
@@ -100,14 +99,19 @@ trait HasMedia
      */
     public function addMediaFromDisk(string $path, string $disk): FileAdder
     {
-        return new FileAdder($this)->setFileFromDisk($path, $disk);
+        return $this->makeFileAdder()->setFileFromDisk($path, $disk);
+    }
+
+    private function makeFileAdder(): FileAdder
+    {
+        return app(FileAdder::class)->for($this);
     }
 
     /**
      * Copy media from another model using S3 server-side copy.
      *
-     * @param object $source
-     * @param string|string[]|null $collections Collection name(s) to copy; null copies all.
+     * @param  string|string[]|null  $collections  Collection name(s) to copy; null copies all.
+     *
      * @throws Throwable
      */
     public function copyMediaFrom(object $source, string|array|null $collections = null): void
@@ -131,7 +135,7 @@ trait HasMedia
     protected function copyMediaRecord(Media $original): Media
     {
         /** @var PathGenerator $generator */
-        $generator = app(config('media.path_generator', PathGenerator::class));
+        $generator = app(PathGenerator::class);
 
         $copy = $original->replicate(['conversions']);
         $copy->uuid = (string) Str::uuid();
@@ -141,28 +145,28 @@ trait HasMedia
         $copy->save();
 
         Storage::disk($original->disk)->copy(
-            $generator->getPath($original) . $original->file_name,
-            $generator->getPath($copy) . $copy->file_name,
+            $generator->getPath($original).$original->file_name,
+            $generator->getPath($copy).$copy->file_name,
         );
 
-        $mediaConversionClass = config('media.models.media_conversion', \Jurager\Media\Models\MediaConversion::class);
+        $mediaConversionClass = config('media.models.media_conversion', MediaConversion::class);
 
         foreach ($original->conversions()->where('status', 'done')->get() as $conversion) {
             $conversionFileName = $original->getConversionFileName($conversion->name);
 
             Storage::disk($conversion->disk)->copy(
-                $generator->getPathForConversions($original) . $conversionFileName,
-                $generator->getPathForConversions($copy) . $conversionFileName,
+                $generator->getPathForConversions($original).$conversionFileName,
+                $generator->getPathForConversions($copy).$conversionFileName,
             );
 
             $mediaConversionClass::create([
-                'media_id'     => $copy->id,
-                'name'         => $conversion->name,
-                'status'       => 'done',
-                'disk'         => $conversion->disk,
-                'extension'    => $conversion->extension,
-                'size'         => $conversion->size,
-                'properties'   => $conversion->properties,
+                'media_id' => $copy->id,
+                'name' => $conversion->name,
+                'status' => 'done',
+                'disk' => $conversion->disk,
+                'extension' => $conversion->extension,
+                'size' => $conversion->size,
+                'properties' => $conversion->properties,
                 'completed_at' => $conversion->completed_at,
             ]);
         }
@@ -252,7 +256,8 @@ trait HasMedia
     /**
      * Reorder media within a collection by providing Media IDs in the desired order.
      *
-     * @param array<int> $orderedIds
+     * @param  array<int>  $orderedIds
+     *
      * @throws Throwable
      */
     public function reorderMedia(string $collection, array $orderedIds): void
@@ -283,10 +288,6 @@ trait HasMedia
 
     /**
      * Delete all media in a collection except the given item(s).
-     *
-     * @param string $collection
-     * @param Media|iterable $except
-     * @return HasMedia
      */
     public function clearMediaCollectionExcept(string $collection = 'default', Media|iterable $except = []): static
     {
@@ -328,10 +329,30 @@ trait HasMedia
     /** @return Conversion[] */
     public function getRegisteredMediaConversions(): array
     {
-        $this->mediaConversions = [];
-        $this->registerMediaConversions(new Media);
+        if ($this->registeredConversionsCache === null) {
+            $this->mediaConversions = [];
+            $this->registerMediaConversions(new Media);
+            $this->registeredConversionsCache = $this->mediaConversions;
+        }
 
-        return $this->mediaConversions;
+        return $this->registeredConversionsCache;
+    }
+
+    /**
+     * Return all statically registered MediaCollection instances.
+     * Dynamic collections (resolved via resolveDynamicMediaCollection) are not included.
+     *
+     * @return array<string, MediaCollection>
+     */
+    public function getRegisteredMediaCollections(): array
+    {
+        if (! $this->mediaCollectionsRegistered) {
+            $this->mediaCollections = [];
+            $this->registerMediaCollections();
+            $this->mediaCollectionsRegistered = true;
+        }
+
+        return $this->mediaCollections;
     }
 
     /**
@@ -343,10 +364,24 @@ trait HasMedia
      *
      * @return Conversion[]
      */
+    /**
+     * Return the conversions that apply to a specific Media item, filtered by both
+     * its collection and its MIME type (via performOnMimeTypes()).
+     *
+     * @return Conversion[]
+     */
+    public function getConversionsForMedia(Media $media): array
+    {
+        return array_values(array_filter(
+            $this->getConversionsForCollection($media->collection_name),
+            static fn (Conversion $c) => $c->shouldBePerformedOnMimeType($media->mime_type),
+        ));
+    }
+
     public function getConversionsForCollection(string $collectionName): array
     {
         $collection = $this->getMediaCollection($collectionName);
-        $callbacks  = $collection?->getConversionCallbacks() ?? [];
+        $callbacks = $collection?->getConversionCallbacks() ?? [];
 
         if (! empty($callbacks)) {
             $this->mediaConversions = [];
@@ -400,18 +435,17 @@ trait HasMedia
         return null;
     }
 
-
     public function assertHasMedia(string $collection = 'default', ?int $count = null): void
     {
         $media = $this->getMedia($collection);
 
-        \PHPUnit\Framework\Assert::assertTrue(
+        Assert::assertTrue(
             $media->isNotEmpty(),
             "Expected [{$collection}] collection to have media, but it is empty.",
         );
 
         if ($count !== null) {
-            \PHPUnit\Framework\Assert::assertCount(
+            Assert::assertCount(
                 $count,
                 $media,
                 "Expected [{$collection}] to have {$count} item(s), got {$media->count()}.",
@@ -423,7 +457,7 @@ trait HasMedia
     {
         $media = $this->getMedia($collection);
 
-        \PHPUnit\Framework\Assert::assertTrue(
+        Assert::assertTrue(
             $media->isEmpty(),
             "Expected [{$collection}] to be empty, but it has {$media->count()} item(s).",
         );
@@ -433,7 +467,7 @@ trait HasMedia
     {
         $media = $this->getMedia($collection);
 
-        \PHPUnit\Framework\Assert::assertCount(
+        Assert::assertCount(
             $count,
             $media,
             "Expected [{$collection}] to have {$count} item(s), got {$media->count()}.",

@@ -1,4 +1,6 @@
-<?php /** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
+<?php
+
+/** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
 /** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
 
 /** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
@@ -35,8 +37,8 @@ class Media extends Model implements Attachable
     ];
 
     protected $casts = [
-        'properties'   => 'array',
-        'size'         => 'integer',
+        'properties' => 'array',
+        'size' => 'integer',
         'order_column' => 'integer',
     ];
 
@@ -133,13 +135,13 @@ class Media extends Model implements Attachable
     public function getPath(string $conversion = ''): string
     {
         /** @var PathGenerator $generator */
-        $generator = app(config('media.path_generator', PathGenerator::class));
+        $generator = app(PathGenerator::class);
 
         if ($conversion) {
-            return $generator->getPathForConversions($this) . $this->getConversionFileName($conversion);
+            return $generator->getPathForConversions($this).$this->getConversionFileName($conversion);
         }
 
-        return $generator->getPath($this) . $this->file_name;
+        return $generator->getPath($this).$this->file_name;
     }
 
     public function getConversionFileName(string $conversion): string
@@ -161,8 +163,8 @@ class Media extends Model implements Attachable
     public function markConversionAsGenerated(string $name, string $ext, array $properties = [], int $size = 0): void
     {
         $data = [
-            'status'       => 'done',
-            'extension'    => $ext,
+            'status' => 'done',
+            'extension' => $ext,
             'completed_at' => now(),
         ];
 
@@ -263,7 +265,7 @@ class Media extends Model implements Attachable
             $i++;
         }
 
-        return round($bytes, 2) . ' ' . $units[$i];
+        return round($bytes, 2).' '.$units[$i];
     }
 
     /**
@@ -298,7 +300,7 @@ class Media extends Model implements Attachable
         $cdnUrl = config('media.cdn_url');
 
         if ($cdnUrl) {
-            return rtrim($cdnUrl, '/') . '/' . ltrim($path, '/');
+            return rtrim($cdnUrl, '/').'/'.ltrim($path, '/');
         }
 
         return Storage::disk($disk)->url($path);
@@ -312,11 +314,11 @@ class Media extends Model implements Attachable
 
         static::deleting(static function (self $media): void {
             /** @var PathGenerator $generator */
-            $generator = app(config('media.path_generator', PathGenerator::class));
+            $generator = app(PathGenerator::class);
 
             // Delete original file
             Storage::disk($media->disk)->delete(
-                $generator->getPath($media) . $media->file_name
+                $generator->getPath($media).$media->file_name
             );
 
             // Delete conversions directory from each unique disk conversions were stored on

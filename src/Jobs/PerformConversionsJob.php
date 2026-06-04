@@ -1,8 +1,4 @@
-<?php /** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
-/** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
-/** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
-
-/** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
+<?php
 
 namespace Jurager\Media\Jobs;
 
@@ -20,7 +16,7 @@ use Jurager\Media\Models\MediaConversion;
 use Jurager\Media\Support\ConverterRegistry;
 use Jurager\Media\Support\PathGenerator;
 
-class PerformConversionsJob implements ShouldQueue, ShouldBeUnique
+class PerformConversionsJob implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
@@ -54,31 +50,27 @@ class PerformConversionsJob implements ShouldQueue, ShouldBeUnique
     }
 
     /**
+     * Dependencies are injected via handle() so they are not serialized with the job
+     * and are always resolved fresh from the container on each execution.
+     *
      * @throws \Throwable
      */
-    public function handle(): void
+    public function handle(ConverterRegistry $registry, PathGenerator $generator): void
     {
         $mediaConversionClass = config('media.models.media_conversion', MediaConversion::class);
         $names = array_map(static fn (Conversion $c) => $c->name, $this->conversions);
 
-        // Mark conversions as processing (also covers retries which have status=failed)
         $mediaConversionClass::where('media_id', $this->media->id)
             ->whereIn('name', $names)
             ->whereIn('status', ['pending', 'failed'])
             ->update(['status' => 'processing', 'error_message' => null]);
 
-        // Preload conversion records so each iteration doesn't query individually
         $conversionRecords = $mediaConversionClass::where('media_id', $this->media->id)
             ->whereIn('name', $names)
             ->get()
             ->keyBy('name');
 
-        /** @var PathGenerator $generator */
-        $generator = app(config('media.path_generator', PathGenerator::class));
-        /** @var ConverterRegistry $registry */
-        $registry  = app(ConverterRegistry::class);
-
-        $originalPath = $generator->getPath($this->media) . $this->media->file_name;
+        $originalPath = $generator->getPath($this->media).$this->media->file_name;
         $stream = Storage::disk($this->media->disk)->readStream($originalPath);
 
         if ($stream === null) {
@@ -99,7 +91,7 @@ class PerformConversionsJob implements ShouldQueue, ShouldBeUnique
             fclose($stream);
 
             foreach ($this->conversions as $conversion) {
-                $record        = $conversionRecords->get($conversion->name);
+                $record = $conversionRecords->get($conversion->name);
                 $conversionTmp = null;
 
                 try {
@@ -109,28 +101,28 @@ class PerformConversionsJob implements ShouldQueue, ShouldBeUnique
                         $mediaConversionClass::where('media_id', $this->media->id)
                             ->where('name', $conversion->name)
                             ->update([
-                                'status'        => 'failed',
+                                'status' => 'failed',
                                 'error_message' => "No converter registered for [{$this->media->mime_type}].",
                             ]);
 
                         continue;
                     }
 
-                    $result        = $converter->convert($tmpFile, $conversion, $this->media);
+                    $result = $converter->convert($tmpFile, $conversion, $this->media);
                     $conversionTmp = $result->path;
 
-                    $basename           = pathinfo($this->media->file_name, PATHINFO_FILENAME);
+                    $basename = pathinfo($this->media->file_name, PATHINFO_FILENAME);
                     $conversionFileName = "{$basename}-{$conversion->name}.{$result->extension}";
-                    $conversionPath     = $generator->getPathForConversions($this->media) . $conversionFileName;
+                    $conversionPath = $generator->getPathForConversions($this->media).$conversionFileName;
 
-                    $content    = file_get_contents($conversionTmp);
+                    $content = file_get_contents($conversionTmp);
                     $resultSize = strlen($content);
 
                     $convDisk = $record?->disk ?? config('media.conversions_disk') ?? $this->media->disk;
                     Storage::disk($convDisk)->put($conversionPath, $content);
 
                     $properties = array_filter([
-                        'width'  => $result->width,
+                        'width' => $result->width,
                         'height' => $result->height,
                     ]);
 

@@ -1,11 +1,9 @@
-<?php /** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
-/** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
-
-/** @noinspection PhpUnnecessaryCurlyVarSyntaxInspection */
+<?php
 
 namespace Jurager\Media\Console\Commands;
 
 use Illuminate\Console\Command;
+use Jurager\Media\Conversions\Conversion;
 use Jurager\Media\Jobs\PerformConversionsJob;
 use Jurager\Media\Models\Media;
 use Jurager\Media\Models\MediaConversion;
@@ -67,6 +65,7 @@ class MediaRegenerateCommand extends Command
 
                 if (empty($conversions)) {
                     $bar->advance();
+
                     continue;
                 }
 
@@ -77,10 +76,10 @@ class MediaRegenerateCommand extends Command
                     $mediaConversionClass::updateOrCreate(
                         ['media_id' => $media->id, 'name' => $conversion->name],
                         [
-                            'status'        => 'pending',
+                            'status' => 'pending',
                             'error_message' => null,
-                            'completed_at'  => null,
-                            'properties'    => null,
+                            'completed_at' => null,
+                            'properties' => null,
                         ],
                     );
                 }
@@ -106,7 +105,7 @@ class MediaRegenerateCommand extends Command
         return self::SUCCESS;
     }
 
-    /** @return \Jurager\Media\Conversions\Conversion[] */
+    /** @return Conversion[] */
     protected function getConversionsFor(Media $media): array
     {
         $mediable = $media->mediable;
